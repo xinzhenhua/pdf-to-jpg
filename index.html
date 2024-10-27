@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF 转 JPG</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f8f9fa;
+        }
+        .container {
+            text-align: center;
+            max-width: 1200px;
+            width: 100%;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 48px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        p {
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .select-button, #convertBtn, #downloadBtn {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 25px 60px;
+            font-size: 24px;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: background-color 0.3s;
+            text-decoration: none;
+            display: inline-block;
+            margin: 10px;
+        }
+        .nav-button {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+            text-decoration: none;
+            display: inline-block;
+            margin: 5px;
+        }
+        .select-button:hover, #convertBtn:hover, #downloadBtn:hover, .nav-button:hover {
+            background-color: #d32f2f;
+        }
+        #pdfInput {
+            display: none;
+        }
+        .progress-container {
+            width: 100%;
+            margin-top: 20px;
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0;
+            background-color: #4CAF50;
+            transition: width 0.3s;
+        }
+        .progress-text {
+            margin-top: 10px;
+            font-size: 18px;
+            color: #333;
+        }
+        #pdfPreview {
+            max-width: 200px;
+            max-height: 300px;
+            border: 1px solid #ddd;
+        }
+        #previewContainer {
+            display: none;
+            margin-top: 20px;
+        }
+        #pageInfo {
+            margin-top: 5px;
+            font-size: 16px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PDF 转 JPG</h1>
+        <p>将 PDF 文件的所有页面转换为 JPG 图片，并打包下载。</p>
+        <input type="file" id="pdfInput" accept=".pdf">
+        <button id="selectButton" class="select-button" onclick="document.getElementById('pdfInput').click()">选择PDF文件</button>
+        <div id="previewContainer">
+            <canvas id="pdfPreview"></canvas>
+            <div id="pageInfo"></div>
+            <button id="prevPage" class="nav-button">上一页</button>
+            <button id="nextPage" class="nav-button">下一页</button>
+        </div>
+        <button id="convertBtn" style="display:none;">开始转换</button>
+        <div id="convertProgress" class="progress-container">
+            <div class="progress-bar">
+                <div id="convertProgressFill" class="progress-fill"></div>
+            </div>
+            <div id="convertProgressText" class="progress-text">转换进度：0%</div>
+        </div>
+        <a id="downloadBtn" style="display:none;">下载ZIP文件</a>
+    </div>
+
+    <script>
+        const pdfInput = document.getElementById('pdfInput');
+        const selectButton = document.getElementById('selectButton');
+        const previewContainer = document.getElementById('previewContainer');
+        const pdfPreview = document.getElementById('pdfPreview');
+        const pageInfo = document.getElementById('pageInfo');
+        const prevPageBtn = document.getElementById('prevPage');
+        const nextPageBtn = document.getElementById('nextPage');
+        const convertBtn = document.getElementById('convertBtn');
+        const convertProgress = document.getElementById('convertProgress');
+        const convertProgressFill = document.getElementById('convertProgressFill');
+        const convertProgressText = document.getElementById('convertProgressText');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+
+        pdfInput.addEventListener('change', handlePDFSelection);
+        convertBtn.addEventListener('click', convertPDFtoJPG);
+        prevPageBtn.addEventListener('click', onPrevPage);
+        nextPageBtn.addEventListener('click', onNextPage);
+
+        function handlePDFSelection(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                selectButton.style.display = 'none';
+                loadPDF(file);
+            } else {
+                alert('请选择有效的PDF文件');
+            }
+        }
+
+        function loadPDF(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                pdfjsLib.getDocument(typedarray).promise.then(function(pdf) {
+                    pdfDoc = pdf;
+                    previewContainer.style.display = 'block';
+                    convertBtn.style.display = 'inline-block';
+                    renderPage(pageNum);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function renderPage(num) {
+            pageRendering = true;
+            pdfDoc.getPage(num).then(function(page) {
+                const viewport = page.getViewport({scale: 1});
+                const scale = Math.min(200 / viewport.width, 300 / viewport.height);
+                const scaledViewport = page.getViewport({scale: scale});
+                pdfPreview.height = scaledViewport.height;
+                pdfPreview.width = scaledViewport.width;
+                const renderContext = {
+                    canvasContext: pdfPreview.getContext('2d'),
+                    viewport: scaledViewport
+                };
+                page.render(renderContext);
+
+                pageRendering = false;
+                if (pageNumPending !== null) {
+                    renderPage(pageNumPending);
+                    pageNumPending = null;
+                }
+            });
+
+            pageInfo.textContent = `第 ${num} 页 / 共 ${pdfDoc.numPages} 页`;
+        }
+
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        function onPrevPage() {
+            if (pageNum <= 1) {
+                return;
+            }
+            pageNum--;
+            queueRenderPage(pageNum);
+        }
+
+        function onNextPage() {
+            if (pageNum >= pdfDoc.numPages) {
+                return;
+            }
+            pageNum++;
+            queueRenderPage(pageNum);
+        }
+
+        async function convertPDFtoJPG() {
+            const file = pdfInput.files[0];
+            if (!file) {
+                alert('请先选择一个PDF文件');
+                return;
+            }
+
+            convertBtn.style.display = 'none';
+            previewContainer.style.display = 'none';
+            convertProgress.style.display = 'block';
+
+            const zip = new JSZip();
+            const reader = new FileReader();
+
+            reader.onload = async function(e) {
+                const typedarray = new Uint8Array(e.target.result);
+                const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                const totalPages = pdf.numPages;
+
+                for (let i = 1; i <= totalPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const scale = 2;
+                    const viewport = page.getViewport({scale: scale});
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+                    await page.render({canvasContext: context, viewport: viewport}).promise;
+                    
+                    const imgData = canvas.toDataURL('image/jpeg').split(',')[1];
+                    zip.file(`${i.toString().padStart(3, '0')}.jpg`, imgData, {base64: true});
+
+                    updateProgress((i / totalPages) * 100);
+                }
+
+                const zipContent = await zip.generateAsync({type: 'blob'});
+                const zipUrl = URL.createObjectURL(zipContent);
+                downloadBtn.href = zipUrl;
+                downloadBtn.download = file.name.replace('.pdf', '.zip');
+                downloadBtn.style.display = 'inline-block';
+                convertProgress.style.display = 'none';
+            };
+
+            reader.readAsArrayBuffer(file);
+        }
+
+        function updateProgress(percent) {
+            const roundedPercent = Math.round(percent);
+            convertProgressFill.style.width = `${roundedPercent}%`;
+            convertProgressText.textContent = `转换进度：${roundedPercent}%`;
+        }
+    </script>
+</body>
+</html>
